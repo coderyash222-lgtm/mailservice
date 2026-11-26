@@ -1,0 +1,21 @@
+name: Keep OTP Service Awake
+
+on:
+  schedule:
+    # Pings /api/health every 10 minutes from outside Render to prevent 15-minute idle spin-down
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health endpoint
+        env:
+          OTP_SERVICE_URL: ${{ vars.OTP_SERVICE_URL }}
+        run: |
+          if [ -z "$OTP_SERVICE_URL" ]; then
+            echo "Set repository variable OTP_SERVICE_URL (e.g. https://mail-otp-service.onrender.com)"
+            exit 0
+          fi
+          curl -fsS --max-time 15 "${OTP_SERVICE_URL%/}/api/health"

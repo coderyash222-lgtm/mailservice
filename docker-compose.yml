@@ -1,0 +1,26 @@
+services:
+  mail-otp-service:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-coderyash2222@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-coderyash2222@gmail.com}
+      OTP_APP_NAME: ${OTP_APP_NAME:-AuthVerify}
+      OTP_API_KEY: ${OTP_API_KEY:-}
+      OTP_EXPIRY_MINUTES: ${OTP_EXPIRY_MINUTES:-5}
+      OTP_COOLDOWN_SECONDS: ${OTP_COOLDOWN_SECONDS:-30}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+    depends_on:
+      - mailpit
+
+  # Local SMTP testing inbox at http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
