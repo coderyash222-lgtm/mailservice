@@ -68,6 +68,12 @@ public class OtpStoreService {
         return new IssuedOtp(email, code, expiryMinutes * 60, cooldownSeconds, expiresAt);
     }
 
+    public void revokeOtp(String rawEmail) {
+        if (rawEmail != null && !rawEmail.isBlank()) {
+            store.remove(normalizeEmail(rawEmail));
+        }
+    }
+
     public VerificationResult verifyOtp(String rawEmail, String candidateOtp) {
         String email = normalizeEmail(rawEmail);
         Instant now = Instant.now();

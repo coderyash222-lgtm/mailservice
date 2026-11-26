@@ -17,15 +17,21 @@ public class MailSenderService {
 
     public MailSenderService(
         JavaMailSender mailSender,
-        @Value("${otp.mail.from:${spring.mail.username:no-reply@example.com}}") String fromAddress,
+        @Value("${otp.mail.from:}") String configuredFrom,
+        @Value("${spring.mail.username:}") String mailUsername,
         @Value("${otp.app-name:AuthVerify}") String defaultAppName
     ) {
         this.mailSender = mailSender;
-        this.fromAddress = sanitizeHeader(fromAddress);
+        String candidate = (configuredFrom != null && !configuredFrom.isBlank()) ? configuredFrom : mailUsername;
+        this.fromAddress = sanitizeHeader(candidate != null ? candidate : "");
         this.defaultAppName = defaultAppName;
     }
 
     public void sendOtpEmail(String recipientEmail, String otpCode, int expiresInSeconds, String requestedAppName) {
+        if (fromAddress.isBlank()) {
+            throw new IllegalStateException("SMTP sender address is missing. Set SMTP_FROM or SMTP_USERNAME.");
+        }
+
         String appName = (requestedAppName != null && !requestedAppName.isBlank())
             ? sanitizeHeader(requestedAppName.trim())
             : sanitizeHeader(defaultAppName);
@@ -44,7 +50,7 @@ public class MailSenderService {
             helper.setText(plainText, htmlBody);
             mailSender.send(message);
         } catch (MessagingException ex) {
-            throw new IllegalStateException("Failed to compose OTP email via JavaMailSender", ex);
+            throw new IllegalStateException("Failed to compose OTP email: " + ex.getMessage(), ex);
         }
     }
 
@@ -63,20 +69,20 @@ public class MailSenderService {
         String safeAppName = HtmlUtils.htmlEscape(appName);
         String safeCode = HtmlUtils.htmlEscape(otpCode);
 
-        return """
+        String template = """
             <!DOCTYPE html>
             <html lang="en">
             <body style="margin:0;padding:32px 16px;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;">
                 <tr>
                   <td style="padding:32px;">
-                    <p style="margin:0 0 8px 0;font-size:13px;font-weight:600;color:#475569;">%s</p>
+                    <p style="margin:0 0 8px 0;font-size:13px;font-weight:600;color:#475569;">{{APP_NAME}}</p>
                     <h1 style="margin:0 0 16px 0;font-size:20px;font-weight:700;color:#0f172a;">Verify your email address</h1>
                     <p style="margin:0 0 24px 0;font-size:14px;line-height:1.6;color:#334155;">
-                      Use the single-use verification code below to complete your sign-in. This code expires in %d minutes.
+                      Use the single-use verification code below to complete your sign-in. This code expires in {{EXPIRY_MINUTES}} minutes.
                     </p>
                     <div style="margin:0 0 24px 0;padding:18px 20px;background-color:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;text-align:center;">
-                      <span style="font-family:'SFMono-Regular',Consolas,monospace;font-size:32px;font-weight:700;letter-spacing:8px;color:#0f172a;">%s</span>
+                      <span style="font-family:'SFMono-Regular',Consolas,monospace;font-size:32px;font-weight:700;letter-spacing:8px;color:#0f172a;">{{OTP_CODE}}</span>
                     </div>
                     <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">
                       If you did not request this verification email, no further action is needed.
@@ -86,6 +92,11 @@ public class MailSenderService {
               </table>
             </body>
             </html>
-            """.formatted(safeAppName, expiryMinutes, safeCode);
+            """;
+
+        return template
+            .replace("{{APP_NAME}}", safeAppName)
+            .replace("{{EXPIRY_MINUTES}}", String.valueOf(expiryMinutes))
+            .replace("{{OTP_CODE}}", safeCode);
     }
 }

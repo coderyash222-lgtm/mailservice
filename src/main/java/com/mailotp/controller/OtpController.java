@@ -12,11 +12,14 @@ import com.mailotp.service.OtpStoreService.CooldownException;
 import com.mailotp.service.OtpStoreService.IssuedOtp;
 import com.mailotp.service.OtpStoreService.StatusSnapshot;
 import com.mailotp.service.OtpStoreService.VerificationResult;
+import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import java.time.Instant;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.MailException;
@@ -34,6 +37,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api")
 @Validated
 public class OtpController {
+
+    private static final Logger log = LoggerFactory.getLogger(OtpController.class);
 
     private final OtpStoreService otpStoreService;
     private final MailSenderService mailSenderService;
@@ -55,12 +60,17 @@ public class OtpController {
     @PostMapping("/v1/otp/send")
     public ResponseEntity<SendOtpResponse> sendOtp(@Valid @RequestBody SendOtpRequest request) {
         IssuedOtp issued = otpStoreService.issueOtp(request.email());
-        mailSenderService.sendOtpEmail(
-            issued.email(),
-            issued.code(),
-            issued.expiresInSeconds(),
-            request.appName()
-        );
+        try {
+            mailSenderService.sendOtpEmail(
+                issued.email(),
+                issued.code(),
+                issued.expiresInSeconds(),
+                request.appName()
+            );
+        } catch (RuntimeException ex) {
+            otpStoreService.revokeOtp(issued.email());
+            throw ex;
+        }
 
         return ResponseEntity.ok(new SendOtpResponse(
             true,
@@ -109,8 +119,26 @@ public class OtpController {
 
     @ExceptionHandler(MailException.class)
     public ResponseEntity<ApiError> handleMailFailure(MailException ex) {
+        String raw = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        log.error("JavaMailSender delivery failed: {}", raw);
+        String lower = raw != null ? raw.toLowerCase() : "";
+        String safeMessage;
+        if (lower.contains("authentication") || lower.contains("username and password") || lower.contains("535")) {
+            safeMessage = "SMTP authentication failed. Verify SMTP_USERNAME and your 16-character Gmail App Password.";
+        } else if (lower.contains("timed out") || lower.contains("connect") || lower.contains("connection refused")) {
+            safeMessage = "SMTP connection failed or timed out (Render Free tier restricts outbound ports 25, 465, and 587; use port 2525 or a paid instance).";
+        } else {
+            safeMessage = "Unable to send email through SMTP server.";
+        }
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-            .body(new ApiError(502, "MAIL_DELIVERY_FAILED", "Unable to send email through SMTP server.", Instant.now()));
+            .body(new ApiError(502, "MAIL_DELIVERY_FAILED", safeMessage, Instant.now()));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiError> handleIllegalState(IllegalStateException ex) {
+        log.error("Mail configuration or composition error: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+            .body(new ApiError(502, "MAIL_CONFIG_ERROR", ex.getMessage(), Instant.now()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -119,6 +147,16 @@ public class OtpController {
             .findFirst()
             .map(err -> err.getField() + ": " + err.getDefaultMessage())
             .orElse("Invalid request payload");
+        return ResponseEntity.badRequest()
+            .body(new ApiError(400, "VALIDATION_ERROR", message, Instant.now()));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiError> handleConstraintViolation(ConstraintViolationException ex) {
+        String message = ex.getConstraintViolations().stream()
+            .findFirst()
+            .map(v -> v.getMessage())
+            .orElse("Invalid request parameter");
         return ResponseEntity.badRequest()
             .body(new ApiError(400, "VALIDATION_ERROR", message, Instant.now()));
     }
